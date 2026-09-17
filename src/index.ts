@@ -182,6 +182,19 @@ const app = new Elysia()
       user,
     };
   })
+  .post("/auth/logout", ({ cookie }) => {
+    const sessionId = cookie.session.value as string | undefined;
+
+    if (sessionId) {
+      db.delete(sessions).where(eq(sessions.id, sessionId)).run();
+    }
+
+    cookie.session.remove();
+
+    return {
+      message: "Logout successful",
+    };
+  })
   .get("/projects", async () => {
     return await db
       .select({
@@ -346,7 +359,7 @@ const app = new Elysia()
     {
       query: t.Object({
         workerId: t.String(),
-        projectId : t.String()
+        projectId: t.String(),
       }),
     },
   )
