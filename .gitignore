@@ -42,5 +42,8 @@ package-lock.json
 **/*.bun
 
 # database
-
+src/db/test.ts
 computeloop.db
+
+# testing
+cookies.txt
