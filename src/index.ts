@@ -38,7 +38,10 @@ const getUserFromSession = (sessionId: string) => {
 const app = new Elysia()
   .use(
     cors({
-      origin: "http://localhost:5173",
+      origin: [
+        "http://localhost:5173",
+        "https://clfrontend-eight.vercel.app",
+      ],
     }),
   )
 
