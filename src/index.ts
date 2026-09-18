@@ -38,10 +38,7 @@ const getUserFromSession = (sessionId: string) => {
 const app = new Elysia()
   .use(
     cors({
-      origin: [
-        "http://localhost:5173",
-        "https://clfrontend-eight.vercel.app",
-      ],
+      origin: ["http://localhost:5173", "https://clfrontend-eight.vercel.app"],
     }),
   )
 
@@ -144,8 +141,8 @@ const app = new Elysia()
       cookie.session.set({
         value: sessionId,
         httpOnly: true,
-        sameSite: "lax",
-        secure: false,
+        sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+        secure: process.env.NODE_ENV === "production",
         path: "/",
         maxAge: 7 * 24 * 60 * 60,
       });
@@ -468,8 +465,8 @@ const app = new Elysia()
   )
 
   .listen({
-    hostname:"0.0.0.0",
-    port:6767
+    hostname: "0.0.0.0",
+    port: 6767,
   });
 
 console.log(
