@@ -4,6 +4,7 @@ import { asc, desc, eq, sql, and } from "drizzle-orm";
 
 import { db } from "./db";
 import { projects, jobs, users, sessions } from "./db/schema";
+import { hostname } from "zod";
 const findSession = (sessionId: string) => {
   return db
     .select({
@@ -463,7 +464,10 @@ const app = new Elysia()
     },
   )
 
-  .listen(3000);
+  .listen({
+    hostname:"0.0.0.0",
+    port:6767
+  });
 
 console.log(
   `🦊 Elysia is running at ${app.server?.hostname}:${app.server?.port}`,

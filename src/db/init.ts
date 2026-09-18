@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 const sqlite = new Database("computeloop.db");
 
 sqlite.run(`
-  CREATE TABLE users (
+  CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY NOT NULL,
     email TEXT NOT NULL UNIQUE,
     username TEXT NOT NULL UNIQUE,
@@ -11,14 +11,14 @@ sqlite.run(`
     created_at TEXT NOT NULL
   );
 
-  CREATE TABLE sessions (
+  CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY NOT NULL,
     user_id TEXT NOT NULL,
     expires_at TEXT NOT NULL,
     FOREIGN KEY (user_id) REFERENCES users(id)
   );
 
-  CREATE TABLE projects (
+  CREATE TABLE IF NOT EXISTS projects (
     id TEXT PRIMARY KEY NOT NULL,
     name TEXT NOT NULL,
     description TEXT NOT NULL,
@@ -30,7 +30,7 @@ sqlite.run(`
     FOREIGN KEY (owner_id) REFERENCES users(id)
   );
 
-  CREATE TABLE jobs (
+  CREATE TABLE IF NOT EXISTS jobs (
     id TEXT PRIMARY KEY NOT NULL,
     project_id TEXT NOT NULL,
     job_number INTEGER NOT NULL,

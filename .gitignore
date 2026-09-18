@@ -47,3 +47,6 @@ computeloop.db
 
 # testing
 cookies.txt
+
+# docker compose
+docker-compose.yml
