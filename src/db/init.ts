@@ -1,6 +1,8 @@
 import { Database } from "bun:sqlite";
 
-const sqlite = new Database("/data/computeloop.db");
+const sqlite = new Database(
+  process.env.DB_PATH ?? "./computeloop.db",
+);
 
 sqlite.run(`
   CREATE TABLE IF NOT EXISTS users (

@@ -307,63 +307,54 @@ const app = new Elysia()
       .orderBy(asc(jobs.jobNumber));
   })
 
-  .get(
-    "/jobs/next",
-    ({ query, status }) => {
-      const workerId = query.workerId;
+  .get("/jobs/next", ({ query, status }) => {
+    const workerId = query.workerId;
 
-      const job = db
-        .select({
-          id: jobs.id,
-          projectId: jobs.projectId,
-          jobNumber: jobs.jobNumber,
-          status: jobs.status,
-          workerId: jobs.workerId,
-          inputStart: jobs.inputStart,
-          inputEnd: jobs.inputEnd,
-          result: jobs.result,
-        })
-        .from(jobs)
-        .where(
-          and(eq(jobs.status, "PENDING"), eq(jobs.projectId, query.projectId)),
-        )
-        .orderBy(asc(jobs.jobNumber))
-        .limit(1)
-        .get();
+    const job = db
+      .select({
+        id: jobs.id,
+        projectId: jobs.projectId,
+        jobNumber: jobs.jobNumber,
+        status: jobs.status,
+        workerId: jobs.workerId,
+        inputStart: jobs.inputStart,
+        inputEnd: jobs.inputEnd,
+        result: jobs.result,
+      })
+      .from(jobs)
+      .where(
+        and(eq(jobs.status, "PENDING"), eq(jobs.projectId, query.projectId)),
+      )
+      .orderBy(asc(jobs.jobNumber))
+      .limit(1)
+      .get();
 
-      if (!job) {
-        return status(404, {
-          message: "No jobs available",
-        });
-      }
+    if (!job) {
+      return status(404, {
+        message: "No jobs available",
+      });
+    }
 
-      db.update(jobs)
-        .set({
-          status: "RUNNING",
-          workerId,
-        })
-        .where(eq(jobs.id, job.id))
-        .run();
-
-      return {
-        id: job.id,
-        projectId: job.projectId,
-        jobNumber: job.jobNumber,
+    db.update(jobs)
+      .set({
         status: "RUNNING",
         workerId,
-        input: {
-          start: job.inputStart,
-          end: job.inputEnd,
-        },
-      };
-    },
-    {
-      query: t.Object({
-        workerId: t.String(),
-        projectId: t.String(),
-      }),
-    },
-  )
+      })
+      .where(and(eq(jobs.id, job.id), eq(jobs.status, "PENDING")))
+      .run();
+
+    return {
+      id: job.id,
+      projectId: job.projectId,
+      jobNumber: job.jobNumber,
+      status: "RUNNING",
+      workerId,
+      input: {
+        start: job.inputStart,
+        end: job.inputEnd,
+      },
+    };
+  })
 
   .post(
     "/jobs/:id/complete",
