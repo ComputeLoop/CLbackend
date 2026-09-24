@@ -54,3 +54,4 @@ docker-compose.yml
 /sample-data 
 /scripts 
 /storage
+/tests

@@ -29,14 +29,9 @@ export const projects = sqliteTable("projects", {
   status: text("status").notNull(),
   createdAt: text("created_at").notNull(),
   ownerId: text("owner_id").notNull().references(() => users.id),
-
-  // Operation this project runs over its dataset chunks.
   opType: text("op_type").notNull().default("image-hash"),
-  // Uploaded dataset (raw file).
   datasetId: text("dataset_id"),
-  // How chunks slice the dataset: "file-list" | "tabular".
   splitType: text("split_type"),
-  // Merged artifact produced when every chunk completed.
   mergedKey: text("merged_key"),
   mergedAt: text("merged_at"),
 });
@@ -48,10 +43,8 @@ export const datasets = sqliteTable("datasets", {
     .references(() => projects.id),
   name: text("name").notNull(),
   originalName: text("original_name").notNull(),
-  // Storage key of the raw uploaded file.
   storageKey: text("storage_key").notNull(),
-  // "file-list" (zip of files) | "tabular" (csv/tsv/jsonl).
-  format: text("format").notNull(),
+  format: text("format").$type<"file-list" | "tabular">().notNull(),
   itemCount: integer("item_count"),
   sizeBytes: integer("size_bytes").notNull(),
   status: text("status").notNull().default("UPLOADED"),
@@ -63,35 +56,20 @@ export const jobs = sqliteTable("jobs", {
   projectId: text("project_id")
     .notNull()
     .references(() => projects.id),
-
   jobNumber: integer("job_number").notNull(),
-
   status: text("status").notNull(),
-
   workerId: text("worker_id"),
-
   inputStart: integer("input_start").notNull(),
   inputEnd: integer("input_end").notNull(),
-
   result: text("result"),
-
-  // Storage key of the raw input this chunk reads (tabular, for ranged GET).
   inputKey: text("input_key"),
-  // JSON manifest describing the slice:
-  //   file-list: [{ path, size, key }]
-  //   tabular:   { key, byteStart, byteEnd, rowStart, rowEnd, header }
   inputManifest: text("input_manifest"),
-
-  // Storage key of the produced output (worker uploads here).
   outputKey: text("output_key"),
-  // SHA-256 hex of the uploaded output, reported by the worker.
   outputHash: text("output_hash"),
-
   startedAt: text("started_at"),
   completedAt: text("completed_at"),
   durationMs: integer("duration_ms"),
   gpuName: text("gpu_name"),
-
   attempts: integer("attempts").notNull().default(0),
   error: text("error"),
 });
@@ -109,3 +87,10 @@ export const workers = sqliteTable("workers", {
   lastHeartbeat: text("last_heartbeat"),
   createdAt: text("created_at").notNull(),
 });
+
+export type User = typeof users.$inferSelect;
+export type Session = typeof sessions.$inferSelect;
+export type Project = typeof projects.$inferSelect;
+export type Dataset = typeof datasets.$inferSelect;
+export type Job = typeof jobs.$inferSelect;
+export type Worker = typeof workers.$inferSelect;

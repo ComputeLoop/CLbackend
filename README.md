@@ -38,12 +38,13 @@ full user-facing walkthrough.
 
 | File | Contents |
 | --- | --- |
-| `src/index.ts` | routes + app wiring (ranged downloads are buffered — see comment) |
-| `src/storage.ts` | local-FS object store, `signUrl` / `verifySignature` |
-| `src/dataset.ts` | format detection, zip extraction, tabular scan (`lineStarts`), `planChunks` |
-| `src/operations.ts` | op registry + per-op manifest/merge logic |
-| `src/db/schema.ts`, `src/db/init.ts` | schema + idempotent upgrade |
-| `scripts/make-sample-dataset.ts` | regenerates `sample-data/dataset.zip` + `sales.csv` |
+| `src/index.ts` | Server listener entrypoint |
+| `src/app.ts` | Elysia app configuration, CORS, error handling, and route composition |
+| `src/config.ts` | Centralized environment and default configuration |
+| `src/routes/` | Modular route controllers (`auth`, `projects`, `explore`, `chunks`, `workers`, `storage`) |
+| `src/services/` | Business logic services (`auth`, `projects`, `storage`, `dataset`, `operations`) |
+| `src/db/schema.ts`, `src/db/init.ts` | Drizzle ORM schema, typed models, and idempotent database initialization |
+| `scripts/make-sample-dataset.ts` | Regenerates `sample-data/dataset.zip` + `sales.csv` |
 
 ## Configuration
 

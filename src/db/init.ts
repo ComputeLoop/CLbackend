@@ -1,14 +1,12 @@
 import { Database } from "bun:sqlite";
+import { DB_PATH } from "../config";
 
-const sqlite = new Database(process.env.DB_PATH ?? "./computeloop.db");
+const sqlite = new Database(DB_PATH);
 
-// SQLite has no "ALTER TABLE ADD COLUMN IF NOT EXISTS", so guard each one.
 function addColumn(statement: string) {
   try {
     sqlite.run(statement);
-  } catch {
-    // Column already exists.
-  }
+  } catch {}
 }
 
 sqlite.run(`
@@ -52,14 +50,12 @@ sqlite.run(`
   );
 `);
 
-// --- projects: new columns ------------------------------------------------
 addColumn(`ALTER TABLE projects ADD COLUMN op_type TEXT DEFAULT 'image-hash'`);
 addColumn(`ALTER TABLE projects ADD COLUMN dataset_id TEXT`);
 addColumn(`ALTER TABLE projects ADD COLUMN split_type TEXT`);
 addColumn(`ALTER TABLE projects ADD COLUMN merged_key TEXT`);
 addColumn(`ALTER TABLE projects ADD COLUMN merged_at TEXT`);
 
-// --- jobs: new columns -----------------------------------------------------
 addColumn(`ALTER TABLE jobs ADD COLUMN input_key TEXT`);
 addColumn(`ALTER TABLE jobs ADD COLUMN input_manifest TEXT`);
 addColumn(`ALTER TABLE jobs ADD COLUMN output_key TEXT`);
@@ -71,7 +67,6 @@ addColumn(`ALTER TABLE jobs ADD COLUMN gpu_name TEXT`);
 addColumn(`ALTER TABLE jobs ADD COLUMN attempts INTEGER DEFAULT 0`);
 addColumn(`ALTER TABLE jobs ADD COLUMN error TEXT`);
 
-// --- new tables -------------------------------------------------------------
 sqlite.run(`
   CREATE TABLE IF NOT EXISTS datasets (
     id TEXT PRIMARY KEY NOT NULL,
