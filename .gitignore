@@ -50,3 +50,7 @@ cookies.txt
 
 # docker compose
 docker-compose.yml
+
+/sample-data 
+/scripts 
+/storage
