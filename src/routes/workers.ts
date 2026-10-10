@@ -1,8 +1,9 @@
 import { Elysia, t } from "elysia";
-import { and, count, desc, eq } from "drizzle-orm";
+import { and, count, desc, eq, sql } from "drizzle-orm";
 import { randomBytes } from "node:crypto";
 import { db } from "../db";
-import { jobs, workers } from "../db/schema";
+import { jobs, projects, users, workers } from "../db/schema";
+import { getOperation } from "../services/operations";
 import {
   getWorkerFromRequest,
   requireUser,
@@ -85,6 +86,53 @@ export const workerRoutes = new Elysia({ prefix: "/workers" })
         online,
         completedChunks: stats?.completed ?? 0,
         createdAt: worker.createdAt,
+      };
+    });
+  })
+  .get("/projects", ({ request, status }) => {
+    const worker = getWorkerFromRequest(request);
+    if (!worker) return status(401, { message: "Invalid worker API key" });
+
+   
+    const rows = db
+      .select({
+        id: projects.id,
+        name: projects.name,
+        description: projects.description,
+        opType: projects.opType,
+        status: projects.status,
+        ownerId: projects.ownerId,
+        ownerUsername: users.username,
+        totalJobs: projects.totalJobs,
+        completedJobs: projects.completedJobs,
+        createdAt: projects.createdAt,
+      })
+      .from(projects)
+      .innerJoin(users, eq(users.id, projects.ownerId))
+      .where(
+        and(
+          sql`${projects.totalJobs} > 0`,
+          sql`${projects.completedJobs} < ${projects.totalJobs}`,
+        ),
+      )
+      .orderBy(desc(projects.createdAt))
+      .all();
+
+    return rows.map((project) => {
+      const op = getOperation(project.opType);
+      return {
+        id: project.id,
+        name: project.name,
+        description: project.description,
+        opType: project.opType,
+        opName: op?.name ?? project.opType,
+        gpu: op?.gpu ?? false,
+        status: project.status,
+        owner: project.ownerUsername,
+        totalJobs: project.totalJobs,
+        completedJobs: project.completedJobs,
+        pendingJobs: project.totalJobs - project.completedJobs,
+        createdAt: project.createdAt,
       };
     });
   })
