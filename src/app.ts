@@ -1,12 +1,13 @@
 import { Elysia } from "elysia";
 import { cors } from "@elysiajs/cors";
 import { CORS_ORIGINS } from "./config";
-import { OPERATIONS, toPublicOperation } from "./services/operations";
+import { listOperations, toPublicOperation } from "./services/operations";
 import { authRoutes } from "./routes/auth";
 import { projectRoutes } from "./routes/projects";
 import { exploreRoutes } from "./routes/explore";
 import { chunkRoutes } from "./routes/chunks";
 import { workerRoutes } from "./routes/workers";
+import { walletRoutes } from "./routes/wallet";
 import { storageRoutes } from "./routes/storage";
 
 export const app = new Elysia()
@@ -32,10 +33,11 @@ export const app = new Elysia()
   .get("/health", () => ({
     status: "ok",
   }))
-  .get("/operations", () => OPERATIONS.map(toPublicOperation))
+  .get("/operations", () => listOperations().map(toPublicOperation))
   .use(authRoutes)
   .use(projectRoutes)
   .use(exploreRoutes)
   .use(chunkRoutes)
   .use(workerRoutes)
+  .use(walletRoutes)
   .use(storageRoutes);

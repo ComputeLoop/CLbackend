@@ -1,7 +1,7 @@
 import { Elysia, t } from "elysia";
 import { eq } from "drizzle-orm";
 import { db } from "../db";
-import { sessions, users } from "../db/schema";
+import { creditTransactions, sessions, users } from "../db/schema";
 import { getSessionCookieOptions, requireUser } from "../services/auth";
 
 export const authRoutes = new Elysia({ prefix: "/auth" })
@@ -33,17 +33,34 @@ export const authRoutes = new Elysia({ prefix: "/auth" })
       });
 
       const userId = crypto.randomUUID();
+      const createdAt = new Date().toISOString();
+      const starterCredits = 1000;
 
       try {
-        db.insert(users)
-          .values({
-            id: userId,
-            email: body.email,
-            username: body.username,
-            passwordHash,
-            createdAt: new Date().toISOString(),
-          })
-          .run();
+        db.transaction((tx) => {
+          tx.insert(users)
+            .values({
+              id: userId,
+              email: body.email,
+              username: body.username,
+              passwordHash,
+              creditBalance: starterCredits,
+              createdAt,
+            })
+            .run();
+          tx.insert(creditTransactions)
+            .values({
+              id: crypto.randomUUID(),
+              userId,
+              projectId: null,
+              jobId: null,
+              kind: "DEMO_GRANT",
+              amount: starterCredits,
+              note: "Beta demo starting balance",
+              createdAt,
+            })
+            .run();
+        });
       } catch (error) {
         console.error("Register insert failed:", error);
         return status(409, { message: "Email or username already registered" });

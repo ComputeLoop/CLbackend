@@ -2,7 +2,7 @@ import { Elysia, t } from "elysia";
 import { and, count, desc, eq, sql } from "drizzle-orm";
 import { randomBytes } from "node:crypto";
 import { db } from "../db";
-import { jobs, projects, users, workers } from "../db/schema";
+import { creditTransactions, jobs, projects, users, workers } from "../db/schema";
 import { getOperation } from "../services/operations";
 import {
   getWorkerFromRequest,
@@ -81,6 +81,7 @@ export const workerRoutes = new Elysia({ prefix: "/workers" })
         name: worker.name,
         gpuName: worker.gpuName,
         vramMb: worker.vramMb,
+        cudaReady: worker.cudaReady,
         status: worker.status,
         lastHeartbeat: worker.lastHeartbeat,
         online,
@@ -105,6 +106,7 @@ export const workerRoutes = new Elysia({ prefix: "/workers" })
         ownerUsername: users.username,
         totalJobs: projects.totalJobs,
         completedJobs: projects.completedJobs,
+        rewardPerChunk: projects.rewardPerChunk,
         createdAt: projects.createdAt,
       })
       .from(projects)
@@ -118,8 +120,15 @@ export const workerRoutes = new Elysia({ prefix: "/workers" })
       .orderBy(desc(projects.createdAt))
       .all();
 
-    return rows.map((project) => {
+    return rows.flatMap((project) => {
       const op = getOperation(project.opType);
+      if (!op) return [];
+      const pendingJobs = db
+        .select({ count: count() })
+        .from(jobs)
+        .where(and(eq(jobs.projectId, project.id), eq(jobs.status, "PENDING")))
+        .get()?.count ?? 0;
+      if (pendingJobs === 0) return [];
       return {
         id: project.id,
         name: project.name,
@@ -127,14 +136,36 @@ export const workerRoutes = new Elysia({ prefix: "/workers" })
         opType: project.opType,
         opName: op?.name ?? project.opType,
         gpu: op?.gpu ?? false,
+        requiresCuda: op?.gpu ?? false,
+        rewardPerChunk: project.rewardPerChunk,
         status: project.status,
         owner: project.ownerUsername,
         totalJobs: project.totalJobs,
         completedJobs: project.completedJobs,
-        pendingJobs: project.totalJobs - project.completedJobs,
+        pendingJobs,
         createdAt: project.createdAt,
       };
     });
+  })
+  .get("/projects/:projectId/chunks", ({ params, request, status }) => {
+    const worker = getWorkerFromRequest(request);
+    if (!worker) return status(401, { message: "Invalid worker API key" });
+
+    const project = db
+      .select({ id: projects.id, opType: projects.opType })
+      .from(projects)
+      .where(eq(projects.id, params.projectId))
+      .get();
+    if (!project) return status(404, { message: "Project not found" });
+
+    const operation = getOperation(project.opType);
+    if (!operation) return status(404, { message: "No supported operation for this project" });
+    return db
+      .select({ id: jobs.id, jobNumber: jobs.jobNumber, status: jobs.status })
+      .from(jobs)
+      .where(and(eq(jobs.projectId, project.id), eq(jobs.status, "PENDING")))
+      .orderBy(jobs.jobNumber)
+      .all();
   })
   .get("/me", ({ request, status }) => {
     const worker = getWorkerFromRequest(request);
@@ -146,17 +177,56 @@ export const workerRoutes = new Elysia({ prefix: "/workers" })
       .where(and(eq(jobs.workerId, worker.id), eq(jobs.status, "COMPLETED")))
       .get();
 
+    const account = db
+      .select({ creditBalance: users.creditBalance })
+      .from(users)
+      .where(eq(users.id, worker.userId))
+      .get();
+    const earned = db
+      .select({ total: sql<number>`COALESCE(SUM(${creditTransactions.amount}), 0)` })
+      .from(creditTransactions)
+      .where(and(
+        eq(creditTransactions.userId, worker.userId),
+        eq(creditTransactions.kind, "EARNED"),
+      ))
+      .get();
+
     return {
       worker: { ...worker, apiKeyHash: undefined },
       completedChunks: stats?.completed ?? 0,
+      creditBalance: account?.creditBalance ?? 0,
+      creditsEarned: earned?.total ?? 0,
     };
   })
-  .post("/heartbeat", ({ request, status }) => {
+  .post("/heartbeat", async ({ request, status }) => {
     const worker = getWorkerFromRequest(request);
     if (!worker) return status(401, { message: "Invalid worker API key" });
 
+    let body: { gpuName?: string | null; cudaReady?: boolean } = {};
+    try {
+      body = (await request.json()) as typeof body;
+    } catch {
+      // Legacy workers may send an empty heartbeat body.
+    }
+
+    const updates: {
+      status: string;
+      lastHeartbeat: string;
+      gpuName?: string | null;
+      cudaReady?: boolean;
+    } = {
+      status: "IDLE",
+      lastHeartbeat: new Date().toISOString(),
+    };
+    if (typeof body.gpuName === "string" || body.gpuName === null) {
+      updates.gpuName = body.gpuName;
+    }
+    if (typeof body.cudaReady === "boolean") {
+      updates.cudaReady = body.cudaReady;
+    }
+
     db.update(workers)
-      .set({ status: "IDLE", lastHeartbeat: new Date().toISOString() })
+      .set(updates)
       .where(eq(workers.id, worker.id))
       .run();
 

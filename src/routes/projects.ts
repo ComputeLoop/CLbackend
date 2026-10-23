@@ -1,7 +1,7 @@
 import { Elysia, t } from "elysia";
 import { and, asc, desc, eq, ne, sql } from "drizzle-orm";
 import { db } from "../db";
-import { datasets, jobs, projects } from "../db/schema";
+import { creditTransactions, datasets, jobs, projects, users } from "../db/schema";
 import { requireUser } from "../services/auth";
 import {
   getProject,
@@ -81,6 +81,7 @@ export const projectRoutes = new Elysia({ prefix: "/projects" })
 
       const projectId = crypto.randomUUID();
       const createdAt = new Date().toISOString();
+      const rewardPerChunk = body.rewardPerChunk ?? 10;
 
       db.insert(projects)
         .values({
@@ -89,6 +90,7 @@ export const projectRoutes = new Elysia({ prefix: "/projects" })
           name: body.name,
           description: body.description,
           opType: op.type,
+          rewardPerChunk,
           totalJobs: 0,
           completedJobs: 0,
           status: "OPEN",
@@ -103,6 +105,7 @@ export const projectRoutes = new Elysia({ prefix: "/projects" })
         opType: op.type,
         opName: op.name,
         gpu: op.gpu,
+        rewardPerChunk,
         totalJobs: 0,
         completedJobs: 0,
         status: "OPEN",
@@ -117,6 +120,7 @@ export const projectRoutes = new Elysia({ prefix: "/projects" })
         name: t.String(),
         description: t.String(),
         opType: t.String(),
+        rewardPerChunk: t.Optional(t.Number({ minimum: 1, maximum: 1000000 })),
       }),
     },
   )
@@ -330,6 +334,8 @@ export const projectRoutes = new Elysia({ prefix: "/projects" })
       }));
 
       let created = 0;
+      const rewardPerChunk = project.rewardPerChunk;
+      const escrowRequired = chunkRows.length * rewardPerChunk;
       try {
         db.transaction((tx) => {
           const claimed = tx
@@ -347,6 +353,48 @@ export const projectRoutes = new Elysia({ prefix: "/projects" })
               "Chunks are already claimed or complete; re-split is only possible before any chunk is picked up",
             );
           }
+
+          const account = tx
+            .select({ creditBalance: users.creditBalance })
+            .from(users)
+            .where(eq(users.id, project.ownerId))
+            .get();
+          const availableCredits = (account?.creditBalance ?? 0) + project.escrowCredits;
+          if (availableCredits < escrowRequired) {
+            throw new Error(
+              `INSUFFICIENT_CREDITS: need ${escrowRequired} credits for ${chunkRows.length} chunks at ${rewardPerChunk} each; available balance and existing escrow total ${availableCredits}.`,
+            );
+          }
+
+          const now = new Date().toISOString();
+          tx.update(users)
+            .set({ creditBalance: availableCredits - escrowRequired })
+            .where(eq(users.id, project.ownerId))
+            .run();
+          if (project.escrowCredits > 0) {
+            tx.insert(creditTransactions).values({
+              id: crypto.randomUUID(),
+              userId: project.ownerId,
+              projectId: project.id,
+              jobId: null,
+              kind: "ESCROW_RELEASE",
+              amount: project.escrowCredits,
+              note: "Released prior project escrow before re-splitting",
+              createdAt: now,
+            }).run();
+          }
+          if (escrowRequired > 0) {
+            tx.insert(creditTransactions).values({
+              id: crypto.randomUUID(),
+              userId: project.ownerId,
+              projectId: project.id,
+              jobId: null,
+              kind: "ESCROW_FUND",
+              amount: -escrowRequired,
+              note: `Escrow for ${chunkRows.length} computation chunks`,
+              createdAt: now,
+            }).run();
+          }
           tx.delete(jobs).where(eq(jobs.projectId, project.id)).run();
           tx.insert(jobs).values(chunkRows).run();
           tx.update(projects)
@@ -355,12 +403,18 @@ export const projectRoutes = new Elysia({ prefix: "/projects" })
               completedJobs: 0,
               splitType: op.splitKind,
               status: "OPEN",
+              escrowCredits: escrowRequired,
             })
             .where(eq(projects.id, project.id))
             .run();
           created = chunkRows.length;
         });
       } catch (error) {
+        if (error instanceof Error && error.message.startsWith("INSUFFICIENT_CREDITS:")) {
+          return status(402, {
+            message: error.message.replace("INSUFFICIENT_CREDITS: ", ""),
+          });
+        }
         return status(409, {
           message:
             error instanceof Error ? error.message : "Split already done",
@@ -373,6 +427,8 @@ export const projectRoutes = new Elysia({ prefix: "/projects" })
         itemCount,
         splitType: op.splitKind,
         opType: op.type,
+        rewardPerChunk,
+        escrowCredits: escrowRequired,
       };
     },
     {

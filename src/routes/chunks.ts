@@ -1,7 +1,8 @@
 import { Elysia, t } from "elysia";
-import { eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, sql } from "drizzle-orm";
+import { createHash } from "node:crypto";
 import { db } from "../db";
-import { jobs, projects, workers } from "../db/schema";
+import { creditTransactions, jobs, operations, projects, users, workers } from "../db/schema";
 import { requireWorker } from "../services/auth";
 import {
   claimJob,
@@ -13,7 +14,7 @@ import {
   sweepStaleJobs,
 } from "../services/projects";
 import { getOperation } from "../services/operations";
-import { signUrl } from "../services/storage";
+import { readObject, signUrl } from "../services/storage";
 import { MAX_FAIL_ATTEMPTS } from "../config";
 
 interface TabularManifestData {
@@ -40,19 +41,65 @@ export const chunkRoutes = new Elysia({ prefix: "/chunks" })
       const worker = requireWorker(request);
       if (!worker) return status(401, { message: "Invalid worker API key" });
 
-      const project = getProject(query.projectId);
-      if (!project) return status(404, { message: "Project not found" });
-
       sweepStaleJobs();
 
-      const op = getOperation(project.opType);
-      const isJsonl = op != null && JSONL_OPS.has(op.type);
-      const outputKey = `projects/${project.id}/outputs/${crypto.randomUUID()}.${isJsonl ? "jsonl" : "json"}`;
+      let projectId = query.projectId;
+      const selectedJobId = query.jobId;
+      if (selectedJobId && !projectId) {
+        return status(400, { message: "projectId is required when selecting a chunk" });
+      }
+      let project = projectId ? getProject(projectId) : undefined;
+      if (projectId && !project) {
+        return status(404, { message: "Project not found" });
+      }
 
-      const job = claimJob(worker.id, project.id, outputKey);
+      if (project && getOperation(project.opType)?.gpu && !worker.cudaReady) {
+        return status(409, {
+          message: "This operation requires a worker with a verified NVIDIA CUDA runtime.",
+        });
+      }
+
+      const candidateProjects = projectId
+        ? [{ id: projectId }]
+        : db
+            .select({ id: projects.id })
+            .from(jobs)
+            .innerJoin(projects, eq(projects.id, jobs.projectId))
+            .innerJoin(operations, eq(operations.type, projects.opType))
+            .where(
+              and(
+                eq(jobs.status, "PENDING"),
+                eq(operations.status, "BUILTIN"),
+                ...(worker.cudaReady ? [] : [eq(operations.gpu, false)]),
+              ),
+            )
+            .orderBy(desc(operations.gpu), asc(projects.createdAt), asc(jobs.jobNumber))
+            .limit(100)
+            .all();
+
+      const visited = new Set<string>();
+      let job = null as ReturnType<typeof claimJob>;
+      for (const candidate of candidateProjects) {
+        if (visited.has(candidate.id)) continue;
+        visited.add(candidate.id);
+        const candidateProject = getProject(candidate.id);
+        if (!candidateProject) continue;
+        const op = getOperation(candidateProject.opType);
+        if (!op || (op.gpu && !worker.cudaReady)) continue;
+        const outputKey = `projects/${candidate.id}/outputs/${crypto.randomUUID()}.${JSONL_OPS.has(op.type) ? "jsonl" : "json"}`;
+        job = claimJob(worker.id, candidate.id, outputKey, selectedJobId);
+        if (job) {
+          projectId = candidate.id;
+          project = candidateProject;
+          break;
+        }
+      }
+
       if (!job) {
         return status(404, { message: "No chunks available" });
       }
+
+      const op = getOperation(project!.opType);
 
       db.update(workers)
         .set({ status: "WORKING" })
@@ -93,6 +140,7 @@ export const chunkRoutes = new Elysia({ prefix: "/chunks" })
       return {
         id: job.id,
         projectId: job.projectId,
+        projectName: project!.name,
         jobNumber: job.jobNumber,
         status: "RUNNING",
         workerId: worker.id,
@@ -102,12 +150,13 @@ export const chunkRoutes = new Elysia({ prefix: "/chunks" })
         instructions: op?.instructions ?? null,
         attempts: job.attempts,
         input,
-        output: { key: outputKey, url: signUrl("PUT", outputKey) },
+        output: { key: job.outputKey!, url: signUrl("PUT", job.outputKey!) },
       };
     },
     {
       query: t.Object({
-        projectId: t.String(),
+        projectId: t.Optional(t.String()),
+        jobId: t.Optional(t.String()),
       }),
     },
   )
@@ -132,11 +181,26 @@ export const chunkRoutes = new Elysia({ prefix: "/chunks" })
       if (!/^[0-9a-f]{64}$/i.test(body.outputHash)) {
         return status(400, { message: "outputHash must be a sha256 hex digest" });
       }
+      if (!job.outputKey) return status(400, { message: "Chunk output was not uploaded" });
+      const output = await readObject(job.outputKey);
+      if (!output) return status(400, { message: "Chunk output was not uploaded" });
+      const actualOutputHash = createHash("sha256").update(output).digest("hex");
+      if (actualOutputHash !== body.outputHash.toLowerCase()) {
+        return status(400, { message: "Uploaded output hash does not match the reported hash" });
+      }
 
       const completedAt = new Date().toISOString();
+      let rewardCredits = 0;
 
       const project = db.transaction((tx) => {
-        tx.update(jobs)
+        const currentProject = tx
+          .select(projectFields)
+          .from(projects)
+          .where(eq(projects.id, job.projectId))
+          .get();
+        if (!currentProject) return null;
+
+        const completion = tx.update(jobs)
           .set({
             status: "COMPLETED",
             result: body.result ?? null,
@@ -145,13 +209,42 @@ export const chunkRoutes = new Elysia({ prefix: "/chunks" })
             durationMs: body.durationMs ?? null,
             gpuName: body.gpuName ?? worker.gpuName ?? null,
           })
-          .where(eq(jobs.id, job.id))
-          .run();
+          .where(and(
+            eq(jobs.id, job.id),
+            eq(jobs.workerId, worker.id),
+            eq(jobs.status, "RUNNING"),
+          ))
+          .run() as unknown as { changes: number };
+        if (completion.changes === 0) return null;
+
+        rewardCredits = currentProject.escrowCredits >= currentProject.rewardPerChunk
+          ? currentProject.rewardPerChunk
+          : 0;
 
         tx.update(projects)
-          .set({ completedJobs: sql`${projects.completedJobs} + 1` })
+          .set({
+            completedJobs: sql`${projects.completedJobs} + 1`,
+            escrowCredits: sql`${projects.escrowCredits} - ${rewardCredits}`,
+          })
           .where(eq(projects.id, job.projectId))
           .run();
+
+        if (rewardCredits > 0) {
+          tx.update(users)
+            .set({ creditBalance: sql`${users.creditBalance} + ${rewardCredits}` })
+            .where(eq(users.id, worker.userId))
+            .run();
+          tx.insert(creditTransactions).values({
+            id: crypto.randomUUID(),
+            userId: worker.userId,
+            projectId: job.projectId,
+            jobId: job.id,
+            kind: "EARNED",
+            amount: rewardCredits,
+            note: `Reward for completing ${currentProject.name}, chunk #${job.jobNumber}`,
+            createdAt: completedAt,
+          }).run();
+        }
 
         const updatedProject = tx
           .select(projectFields)
@@ -172,6 +265,9 @@ export const chunkRoutes = new Elysia({ prefix: "/chunks" })
 
         return { ...updatedProject, status: newStatus };
       });
+      if (!project) {
+        return status(409, { message: "Chunk was already completed or is no longer assigned to this worker" });
+      }
 
       db.update(workers)
         .set({ status: "IDLE", lastHeartbeat: completedAt })
@@ -188,6 +284,7 @@ export const chunkRoutes = new Elysia({ prefix: "/chunks" })
         job: { ...job, status: "COMPLETED", outputHash: body.outputHash },
         project,
         merge,
+        rewardCredits,
       };
     },
     {

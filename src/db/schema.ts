@@ -9,6 +9,7 @@ export const users = sqliteTable("users", {
   email: text("email").notNull().unique(),
   username: text("username").notNull().unique(),
   passwordHash: text("password_hash").notNull(),
+  creditBalance: integer("credit_balance").notNull().default(1000),
   createdAt: text("created_at").notNull(),
 });
 
@@ -34,6 +35,8 @@ export const projects = sqliteTable("projects", {
   splitType: text("split_type"),
   mergedKey: text("merged_key"),
   mergedAt: text("merged_at"),
+  rewardPerChunk: integer("reward_per_chunk").notNull().default(10),
+  escrowCredits: integer("escrow_credits").notNull().default(0),
 });
 
 export const datasets = sqliteTable("datasets", {
@@ -82,9 +85,34 @@ export const workers = sqliteTable("workers", {
   name: text("name").notNull(),
   gpuName: text("gpu_name"),
   vramMb: integer("vram_mb"),
+  cudaReady: integer("cuda_ready", { mode: "boolean" }).notNull().default(false),
   apiKeyHash: text("api_key_hash").notNull(),
   status: text("status").notNull().default("IDLE"),
   lastHeartbeat: text("last_heartbeat"),
+  createdAt: text("created_at").notNull(),
+});
+
+export const operations = sqliteTable("operations", {
+  type: text("type").primaryKey(),
+  name: text("name").notNull(),
+  description: text("description").notNull(),
+  splitKind: text("split_kind").$type<"file-list" | "tabular">().notNull(),
+  defaultChunkSize: integer("default_chunk_size").notNull(),
+  gpu: integer("gpu", { mode: "boolean" }).notNull().default(false),
+  outputFormat: text("output_format").notNull(),
+  instructions: text("instructions"),
+  status: text("status").notNull().default("BUILTIN"),
+  createdAt: text("created_at").notNull(),
+});
+
+export const creditTransactions = sqliteTable("credit_transactions", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull().references(() => users.id),
+  projectId: text("project_id").references(() => projects.id),
+  jobId: text("job_id").references(() => jobs.id),
+  kind: text("kind").notNull(),
+  amount: integer("amount").notNull(),
+  note: text("note").notNull(),
   createdAt: text("created_at").notNull(),
 });
 
