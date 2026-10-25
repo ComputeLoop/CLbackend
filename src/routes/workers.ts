@@ -82,6 +82,8 @@ export const workerRoutes = new Elysia({ prefix: "/workers" })
         gpuName: worker.gpuName,
         vramMb: worker.vramMb,
         cudaReady: worker.cudaReady,
+        gpuReady: worker.gpuReady,
+        gpuBackend: worker.gpuBackend,
         status: worker.status,
         lastHeartbeat: worker.lastHeartbeat,
         online,
@@ -136,7 +138,7 @@ export const workerRoutes = new Elysia({ prefix: "/workers" })
         opType: project.opType,
         opName: op?.name ?? project.opType,
         gpu: op?.gpu ?? false,
-        requiresCuda: op?.gpu ?? false,
+        requiresGpu: op.gpu,
         rewardPerChunk: project.rewardPerChunk,
         status: project.status,
         owner: project.ownerUsername,
@@ -202,7 +204,13 @@ export const workerRoutes = new Elysia({ prefix: "/workers" })
     const worker = getWorkerFromRequest(request);
     if (!worker) return status(401, { message: "Invalid worker API key" });
 
-    let body: { gpuName?: string | null; cudaReady?: boolean } = {};
+    let body: {
+      gpuName?: string | null;
+      vramMb?: number | null;
+      gpuReady?: boolean;
+      gpuBackend?: "cuda" | "directml" | null;
+      cudaReady?: boolean;
+    } = {};
     try {
       body = (await request.json()) as typeof body;
     } catch {
@@ -213,7 +221,10 @@ export const workerRoutes = new Elysia({ prefix: "/workers" })
       status: string;
       lastHeartbeat: string;
       gpuName?: string | null;
+      vramMb?: number | null;
       cudaReady?: boolean;
+      gpuReady?: boolean;
+      gpuBackend?: "cuda" | "directml" | null;
     } = {
       status: "IDLE",
       lastHeartbeat: new Date().toISOString(),
@@ -221,8 +232,20 @@ export const workerRoutes = new Elysia({ prefix: "/workers" })
     if (typeof body.gpuName === "string" || body.gpuName === null) {
       updates.gpuName = body.gpuName;
     }
-    if (typeof body.cudaReady === "boolean") {
+    if (typeof body.vramMb === "number" || body.vramMb === null) {
+      updates.vramMb = body.vramMb;
+    }
+    const backend = body.gpuBackend === "cuda" || body.gpuBackend === "directml"
+      ? body.gpuBackend
+      : null;
+    if (typeof body.gpuReady === "boolean") {
+      updates.gpuReady = body.gpuReady && backend !== null;
+      updates.gpuBackend = body.gpuReady ? backend : null;
+      updates.cudaReady = body.gpuReady && backend === "cuda";
+    } else if (typeof body.cudaReady === "boolean") {
       updates.cudaReady = body.cudaReady;
+      updates.gpuReady = body.cudaReady;
+      updates.gpuBackend = body.cudaReady ? "cuda" : null;
     }
 
     db.update(workers)

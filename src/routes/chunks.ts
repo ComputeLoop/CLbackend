@@ -53,9 +53,9 @@ export const chunkRoutes = new Elysia({ prefix: "/chunks" })
         return status(404, { message: "Project not found" });
       }
 
-      if (project && getOperation(project.opType)?.gpu && !worker.cudaReady) {
+      if (project && getOperation(project.opType)?.gpu && !worker.gpuReady) {
         return status(409, {
-          message: "This operation requires a worker with a verified NVIDIA CUDA runtime.",
+          message: "This operation requires a worker with a verified NVIDIA GPU runtime (CUDA or DirectML).",
         });
       }
 
@@ -70,7 +70,7 @@ export const chunkRoutes = new Elysia({ prefix: "/chunks" })
               and(
                 eq(jobs.status, "PENDING"),
                 eq(operations.status, "BUILTIN"),
-                ...(worker.cudaReady ? [] : [eq(operations.gpu, false)]),
+                ...(worker.gpuReady ? [] : [eq(operations.gpu, false)]),
               ),
             )
             .orderBy(desc(operations.gpu), asc(projects.createdAt), asc(jobs.jobNumber))
@@ -85,7 +85,7 @@ export const chunkRoutes = new Elysia({ prefix: "/chunks" })
         const candidateProject = getProject(candidate.id);
         if (!candidateProject) continue;
         const op = getOperation(candidateProject.opType);
-        if (!op || (op.gpu && !worker.cudaReady)) continue;
+        if (!op || (op.gpu && !worker.gpuReady)) continue;
         const outputKey = `projects/${candidate.id}/outputs/${crypto.randomUUID()}.${JSONL_OPS.has(op.type) ? "jsonl" : "json"}`;
         job = claimJob(worker.id, candidate.id, outputKey, selectedJobId);
         if (job) {

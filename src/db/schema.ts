@@ -86,6 +86,8 @@ export const workers = sqliteTable("workers", {
   gpuName: text("gpu_name"),
   vramMb: integer("vram_mb"),
   cudaReady: integer("cuda_ready", { mode: "boolean" }).notNull().default(false),
+  gpuReady: integer("gpu_ready", { mode: "boolean" }).notNull().default(false),
+  gpuBackend: text("gpu_backend").$type<"cuda" | "directml" | null>(),
   apiKeyHash: text("api_key_hash").notNull(),
   status: text("status").notNull().default("IDLE"),
   lastHeartbeat: text("last_heartbeat"),

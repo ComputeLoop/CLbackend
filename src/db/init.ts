@@ -93,6 +93,8 @@ sqlite.run(`
     gpu_name TEXT,
     vram_mb INTEGER,
     cuda_ready INTEGER NOT NULL DEFAULT 0,
+    gpu_ready INTEGER NOT NULL DEFAULT 0,
+    gpu_backend TEXT,
     api_key_hash TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'IDLE',
     last_heartbeat TEXT,
@@ -128,6 +130,13 @@ sqlite.run(`
   );
 `);
 addColumn(`ALTER TABLE workers ADD COLUMN cuda_ready INTEGER NOT NULL DEFAULT 0`);
+addColumn(`ALTER TABLE workers ADD COLUMN gpu_ready INTEGER NOT NULL DEFAULT 0`);
+addColumn(`ALTER TABLE workers ADD COLUMN gpu_backend TEXT`);
+sqlite.run(`
+  UPDATE workers
+  SET gpu_ready = 1, gpu_backend = 'cuda'
+  WHERE cuda_ready = 1 AND gpu_ready = 0
+`);
 
 const insertOperation = sqlite.prepare(`
   INSERT OR IGNORE INTO operations (

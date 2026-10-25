@@ -32,6 +32,6 @@ export const BUILTIN_OPERATIONS: Operation[] = [
     gpu: true,
     outputFormat: "JSONL (one record per image)",
     instructions:
-      "The contributor launcher automatically prepares the supported NVIDIA CUDA runtime and MobileNet-v2 model. Currently supported on Linux x64.",
+      "The contributor launcher prepares MobileNet-v2 and verifies GPU inference before claiming work. Verified GPU support is NVIDIA CUDA on Linux x64; Windows DirectML is available for validation but is not yet advertised as supported.",
   },
 ];
