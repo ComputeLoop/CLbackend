@@ -20,7 +20,15 @@ function reject(status: number, message: string): never {
 }
 type Role = "owner" | "admin" | "member";
 type Actor = { userId: string };
-type App = { id: string; source_url: string | null; instructions: string };
+type App = {
+  id: string;
+  source_url: string | null;
+  package_id: string | null;
+  instructions: string;
+  gpu: number;
+  digest: string;
+  bytes: number;
+};
 type Task = {
   id: string;
   state: string;
@@ -80,11 +88,14 @@ function list(user: string) {
 function application(workspace: string, id: string) {
   const row = sqlite
     .query(
-      "SELECT id, source_url, instructions FROM team_apps WHERE id = ? AND workspace_id = ?",
+      "SELECT id, source_url, package_id, instructions, gpu, digest, bytes FROM team_apps WHERE id = ? AND workspace_id = ?",
     )
     .get(id, workspace) as App | null;
-  if (!row) reject(404, "Application not found.");
+  if (!row) reject(404, "Worker not found.");
   return row;
+}
+function workerInUse(id: string) {
+  return Boolean(sqlite.query("SELECT 1 FROM team_jobs WHERE app_id = ? LIMIT 1").get(id));
 }
 function task(workspace: string, id: string) {
   const row = sqlite
@@ -126,6 +137,16 @@ async function fileDownload(key: string, name: string, type: string) {
   });
 }
 const appKey = (id: string) => `teams/apps/${id}.zip`;
+const workerPackageKey = (app: Pick<App, "id" | "package_id">) => appKey(app.package_id ?? app.id);
+async function removeWorkerPackage(key: string) {
+  try {
+    await rm(objectPath(key), { force: true });
+    return true;
+  } catch (error) {
+    console.error(`Worker package cleanup failed (${key}):`, error);
+    return false;
+  }
+}
 const inputKey = (id: string) => `teams/inputs/${id}.zip`;
 const resultDirectory = (id: string) => `teams/results/${id}`;
 const resultKey = (id: string, lease: string) =>
@@ -149,6 +170,37 @@ function httpsLink(value: string) {
   if (url.protocol !== "https:" || url.username || url.password)
     reject(400, "Use an HTTPS link without embedded credentials.");
   return url.href;
+}
+const workerForm = t.Object({
+  name,
+  device: t.Union([t.Literal("cpu"), t.Literal("gpu")]),
+  instructions: t.String({ maxLength: 8000 }),
+  sourceUrl: t.Optional(t.String({ maxLength: 2000 })),
+  package: t.Optional(t.File({ maxSize: 32 * MiB })),
+});
+function workerFields(body: typeof workerForm.static) {
+  const source = body.sourceUrl?.trim();
+  const name = body.name.trim();
+  const instructions = body.instructions.trim();
+  if (!name) reject(400, "Enter a worker name.");
+  if (source && body.package) reject(400, "Choose either a worker ZIP or a download link.");
+  return { name, instructions, sourceUrl: source ? httpsLink(source) : null, gpu: body.device === "gpu" ? 1 : 0 };
+}
+async function readWorkerPackage(file: File) {
+  const content = Buffer.from(await file.arrayBuffer());
+  try {
+    const entries = new AdmZip(content).getEntries();
+    if (!entries.some((entry) => !entry.isDirectory))
+      reject(400, "The worker ZIP must contain at least one file.");
+  } catch (error) {
+    if (error instanceof WorkspaceError) throw error;
+    reject(400, "Upload a valid ZIP package.");
+  }
+  return { content, digest: createHash("sha256").update(content).digest("hex") };
+}
+function assertRunnableWorker(workspace: string, id: string) {
+  if (!application(workspace, id).instructions)
+    reject(409, "Publish a worker with run instructions before creating new tasks.");
 }
 
 export const workspaceRoutes = new Elysia({ prefix: "/team" })
@@ -211,9 +263,9 @@ export const workspaceRoutes = new Elysia({ prefix: "/team" })
 
           const apps = sqlite
             .query(
-              "SELECT id FROM team_apps WHERE workspace_id = ? AND source_url IS NULL",
+              "SELECT id, package_id FROM team_apps WHERE workspace_id = ? AND source_url IS NULL",
             )
-            .all(id) as { id: string }[];
+            .all(id) as Pick<App, "id" | "package_id">[];
           const tasks = sqlite
             .query(
               `SELECT t.id FROM team_tasks t JOIN team_jobs j ON j.id = t.job_id
@@ -238,7 +290,7 @@ export const workspaceRoutes = new Elysia({ prefix: "/team" })
         .immediate();
 
       const cleanup = await Promise.allSettled([
-        ...apps.map((app) => rm(objectPath(appKey(app.id)), { force: true })),
+        ...apps.map((app) => rm(objectPath(workerPackageKey(app)), { force: true })),
         ...tasks.flatMap((task) => [
           rm(objectPath(inputKey(task.id)), { force: true }),
           rm(objectPath(resultDirectory(task.id)), {
@@ -289,7 +341,7 @@ export const workspaceRoutes = new Elysia({ prefix: "/team" })
             [PRICE, actor.userId, PRICE],
           ).changes
         ) {
-          reject(409, "Simulate a top-up before subscribing.");
+          reject(409, "Not enough Compute coins. Use Top up in the header and try again.");
         }
         const paidUntil = Math.max(now, row.paid_until) + MONTH;
         sqlite.run("UPDATE workspaces SET paid_until = ? WHERE id = ?", [
@@ -424,7 +476,7 @@ export const workspaceRoutes = new Elysia({ prefix: "/team" })
         .all(params.id),
       jobs: sqlite
         .query(
-          "SELECT id, name, app_id AS appId FROM team_jobs WHERE workspace_id = ? ORDER BY created_at DESC",
+          "SELECT id, name, app_id AS appId, result_instructions AS resultInstructions FROM team_jobs WHERE workspace_id = ? ORDER BY created_at DESC",
         )
         .all(params.id),
       tasks: sqlite
@@ -442,30 +494,14 @@ export const workspaceRoutes = new Elysia({ prefix: "/team" })
     async ({ params, body, cookie }) => {
       const actor = cookieActor(cookie);
       membership(params.id, actor, "admin");
-      const source = body.sourceUrl?.trim();
-      if (Boolean(source) === Boolean(body.package))
+      const worker = workerFields(body);
+      if (!worker.sourceUrl && !body.package)
         reject(400, "Upload a worker ZIP or provide a download link.");
-      if (!body.name.trim() || !body.instructions.trim())
-        reject(400, "Enter a worker name and instructions for your members.");
-      const sourceUrl = source ? httpsLink(source) : null;
+      if (!worker.instructions) reject(400, "Enter run instructions for your members.");
       const id = crypto.randomUUID();
-      let digest = "",
-        bytes = 0;
-      if (body.package) {
-        const content = Buffer.from(await body.package.arrayBuffer());
-        try {
-          const entries = new AdmZip(content).getEntries();
-          if (!entries.some((entry) => !entry.isDirectory))
-            reject(400, "The worker ZIP must contain at least one file.");
-        } catch (error) {
-          if (error instanceof WorkspaceError) throw error;
-          reject(400, "Upload a valid ZIP package.");
-        }
-        bytes = content.length;
-        digest = createHash("sha256").update(content).digest("hex");
-        await writeObject(appKey(id), content);
-      }
+      const upload = body.package ? await readWorkerPackage(body.package) : null;
       try {
+        if (upload) await writeObject(appKey(id), upload.content);
         membership(params.id, actor, "admin");
         sqlite.run(
           `INSERT INTO team_apps(id, workspace_id, name, gpu, digest, bytes, source_url, instructions)
@@ -473,47 +509,89 @@ export const workspaceRoutes = new Elysia({ prefix: "/team" })
           [
             id,
             params.id,
-            body.name.trim(),
-            body.device === "gpu" ? 1 : 0,
-            digest,
-            bytes,
-            sourceUrl,
-            body.instructions.trim(),
+            worker.name,
+            worker.gpu,
+            upload?.digest ?? "",
+            upload?.content.length ?? 0,
+            worker.sourceUrl,
+            worker.instructions,
           ],
         );
       } catch (error) {
-        if (body.package) await rm(objectPath(appKey(id)), { force: true });
+        if (upload) await removeWorkerPackage(appKey(id));
         throw error;
       }
       return { id };
     },
-    {
-      body: t.Object({
-        name,
-        device: t.Union([t.Literal("cpu"), t.Literal("gpu")]),
-        instructions: t.String({ minLength: 1, maxLength: 8000 }),
-        sourceUrl: t.Optional(t.String({ maxLength: 2000 })),
-        package: t.Optional(t.File({ maxSize: 32 * MiB })),
-      }),
-    },
+    { body: workerForm },
   )
+  .post(
+    "/workspaces/:id/apps/:appId",
+    async ({ params, body, cookie }) => {
+      const actor = cookieActor(cookie);
+      membership(params.id, actor, "admin");
+      const worker = workerFields(body);
+      const check = (app: App) => {
+        if (workerInUse(app.id)) {
+          if (body.package || (worker.sourceUrl && worker.sourceUrl !== app.source_url) || worker.gpu !== app.gpu || worker.instructions !== app.instructions)
+            reject(409, "Jobs already use this worker. Publish a new worker to change its files, hardware requirements, or run instructions.");
+        } else if (!worker.instructions) {
+          reject(400, "Enter run instructions for your members.");
+        }
+      };
+      check(application(params.id, params.appId));
+      const upload = body.package ? await readWorkerPackage(body.package) : null;
+      const packageId = upload ? crypto.randomUUID() : null;
+      let previousPackage: string | null;
+      try {
+        if (upload && packageId) await writeObject(appKey(packageId), upload.content);
+        previousPackage = sqlite.transaction(() => {
+          membership(params.id, actor, "admin");
+          const app = application(params.id, params.appId);
+          check(app);
+          const changedSource = Boolean(upload || worker.sourceUrl);
+          sqlite.run(
+            "UPDATE team_apps SET name = ?, gpu = ?, instructions = ?, source_url = ?, package_id = ?, digest = ?, bytes = ? WHERE id = ?",
+            [worker.name, worker.gpu, worker.instructions,
+              changedSource ? worker.sourceUrl : app.source_url,
+              changedSource ? packageId : app.package_id,
+              changedSource ? upload?.digest ?? "" : app.digest,
+              changedSource ? upload?.content.length ?? 0 : app.bytes, app.id],
+          );
+          return changedSource && !app.source_url ? workerPackageKey(app) : null;
+        }).immediate();
+      } catch (error) {
+        if (packageId) await removeWorkerPackage(appKey(packageId));
+        throw error;
+      }
+      return { cleanupComplete: !previousPackage || await removeWorkerPackage(previousPackage) };
+    },
+    { body: workerForm },
+  )
+  .post("/workspaces/:id/apps/:appId/delete", async ({ params, cookie }) => {
+    const actor = cookieActor(cookie);
+    const app = sqlite.transaction(() => {
+      membership(params.id, actor, "admin");
+      const app = application(params.id, params.appId);
+      if (workerInUse(app.id)) reject(409, "This worker cannot be deleted because it is used by a job.");
+      sqlite.run("DELETE FROM team_apps WHERE id = ?", [app.id]);
+      return app;
+    }).immediate();
+    return { cleanupComplete: Boolean(app.source_url) || await removeWorkerPackage(workerPackageKey(app)) };
+  })
   .get("/workspaces/:id/apps/:appId/package", ({ params, cookie }) => {
     membership(params.id, cookieActor(cookie));
     const app = application(params.id, params.appId);
     if (app.source_url)
       reject(404, "This worker uses an external download link.");
-    return fileDownload(appKey(params.appId), "worker.zip", "application/zip");
+    return fileDownload(workerPackageKey(app), "worker.zip", "application/zip");
   })
   .post(
     "/workspaces/:id/jobs",
     async ({ params, body, cookie }) => {
       const actor = cookieActor(cookie);
       membership(params.id, actor, "admin");
-      if (!application(params.id, body.appId).instructions)
-        reject(
-          409,
-          "Publish a worker with run instructions before creating new tasks.",
-        );
+      assertRunnableWorker(params.id, body.appId);
       const { manifest } = body;
       if (
         manifest.some(
@@ -554,12 +632,15 @@ export const workspaceRoutes = new Elysia({ prefix: "/team" })
         membership(params.id, actor, "admin");
         sqlite
           .transaction(() => {
-            sqlite.run("INSERT INTO team_jobs VALUES (?, ?, ?, ?, ?)", [
+            assertRunnableWorker(params.id, body.appId);
+            sqlite.run(`INSERT INTO team_jobs(id, workspace_id, app_id, name, created_at, result_instructions)
+              VALUES (?, ?, ?, ?, ?, ?)`, [
               jobId,
               params.id,
               body.appId,
               body.name.trim(),
               Date.now(),
+              body.resultInstructions?.trim() ?? "",
             ]);
             rows.forEach((row, i) => {
               const bytes =
@@ -583,8 +664,9 @@ export const workspaceRoutes = new Elysia({ prefix: "/team" })
       body: t.Object({
         name,
         appId: t.String(),
-        manifest: taskManifest,
-        inputs: t.Optional(t.Files({ maxSize: 16 * MiB, maxItems: 100 })),
+          manifest: taskManifest,
+          inputs: t.Optional(t.Files({ maxSize: 16 * MiB, maxItems: 100 })),
+          resultInstructions: t.Optional(t.String({ maxLength: 4000 })),
       }),
     },
   )

@@ -26,6 +26,7 @@ export function initializeWorkspaces(sqlite: Database) {
       id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id),
       app_id TEXT NOT NULL REFERENCES team_apps(id), name TEXT NOT NULL, created_at INTEGER NOT NULL
     );
+    CREATE INDEX IF NOT EXISTS team_jobs_app ON team_jobs(app_id);
     CREATE TABLE IF NOT EXISTS team_tasks (
       id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES team_jobs(id), position INTEGER NOT NULL,
       label TEXT NOT NULL, args TEXT NOT NULL, input_bytes INTEGER NOT NULL DEFAULT 0,
@@ -48,6 +49,8 @@ export function initializeWorkspaces(sqlite: Database) {
   };
   addColumn("team_apps", "source_url", "TEXT");
   addColumn("team_apps", "instructions", "TEXT NOT NULL DEFAULT ''");
+  addColumn("team_apps", "package_id", "TEXT");
+  addColumn("team_jobs", "result_instructions", "TEXT NOT NULL DEFAULT ''");
   addColumn("team_tasks", "claimed_by", "TEXT REFERENCES users(id)");
   sqlite.exec("CREATE INDEX IF NOT EXISTS team_tasks_claimed_by ON team_tasks(claimed_by, state)");
 }
