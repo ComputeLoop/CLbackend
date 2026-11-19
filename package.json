@@ -2,7 +2,7 @@
   "name": "backend",
   "version": "1.0.50",
   "scripts": {
-    "test": "bun test",
+    "test": "bun test integration",
     "dev": "bun run --watch src/index.ts",
     "db:init": "bun run src/db/init.ts"
   },
