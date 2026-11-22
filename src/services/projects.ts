@@ -18,6 +18,8 @@ export const projectFields = {
   datasetId: projects.datasetId,
   mergedKey: projects.mergedKey,
   mergedAt: projects.mergedAt,
+  rewardPerChunk: projects.rewardPerChunk,
+  escrowCredits: projects.escrowCredits,
 };
 
 export const jobFields = {
@@ -71,13 +73,22 @@ export function sweepStaleJobs() {
     .run();
 }
 
-export function claimJob(workerId: string, projectId: string, outputKey: string) {
+export function claimJob(
+  workerId: string,
+  projectId: string,
+  outputKey: string,
+  jobId?: string,
+) {
   const now = new Date().toISOString();
   for (let attempt = 0; attempt < 5; attempt++) {
     const candidate = db
       .select(jobFields)
       .from(jobs)
-      .where(and(eq(jobs.status, "PENDING"), eq(jobs.projectId, projectId)))
+      .where(and(
+        eq(jobs.status, "PENDING"),
+        eq(jobs.projectId, projectId),
+        ...(jobId ? [eq(jobs.id, jobId)] : []),
+      ))
       .orderBy(asc(jobs.jobNumber))
       .limit(1)
       .get();

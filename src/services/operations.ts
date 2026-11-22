@@ -1,3 +1,7 @@
+import { and, eq } from "drizzle-orm";
+import { db } from "../db";
+import { operations } from "../db/schema";
+
 export type SplitKind = "file-list" | "tabular";
 
 export interface Operation {
@@ -11,43 +15,64 @@ export interface Operation {
   instructions?: string;
 }
 
-export const OPERATIONS: Operation[] = [
-  {
-    type: "image-hash",
-    name: "Image integrity & metadata",
-    description:
-      "Computes a SHA-256 hash plus the width and height of every image file in the dataset. Ideal for verifying large image archives that are too slow to re-download.",
-    splitKind: "file-list",
-    defaultChunkSize: 5,
-    gpu: false,
-    outputFormat: "JSONL (one record per image)",
-  },
-  {
-    type: "tabular-stats",
-    name: "Tabular dataset statistics",
-    description:
-      "Counts rows and computes min/mean/max/sum of every numeric column in a CSV/TSV/JSONL file. Each chunk scans a disjoint slice of rows, so huge tables finish in parallel.",
-    splitKind: "tabular",
-    defaultChunkSize: 100_000,
-    gpu: false,
-    outputFormat: "JSON (one stats object per chunk)",
-  },
-  {
-    type: "image-classify",
-    name: "Image classification (GPU)",
-    description:
-      "Runs a MobileNet-style ONNX classifier over every image and emits the top predicted label per image. This is the first GPU op.",
-    splitKind: "file-list",
-    defaultChunkSize: 50,
-    gpu: true,
-    outputFormat: "JSONL (one record per image)",
-    instructions:
-      "Contributors need `onnxruntime-node` installed plus a MobileNet-v2 .onnx model (see worker README).",
-  },
-];
+function normalizeOperation(
+  operation:
+    | {
+        type: string;
+        name: string;
+        description: string;
+        splitKind: SplitKind;
+        defaultChunkSize: number;
+        gpu: boolean;
+        outputFormat: string;
+        instructions: string | null;
+      }
+    | undefined,
+): Operation | undefined {
+  if (!operation) return undefined;
+  const { instructions, ...fields } = operation;
+  return instructions ? { ...fields, instructions } : fields;
+}
+
+export function listOperations(): Operation[] {
+  return db
+    .select({
+      type: operations.type,
+      name: operations.name,
+      description: operations.description,
+      splitKind: operations.splitKind,
+      defaultChunkSize: operations.defaultChunkSize,
+      gpu: operations.gpu,
+      outputFormat: operations.outputFormat,
+      instructions: operations.instructions,
+    })
+    .from(operations)
+    .where(eq(operations.status, "BUILTIN"))
+    .all()
+    .map((operation) => normalizeOperation(operation)!);
+}
 
 export function getOperation(type: string): Operation | undefined {
-  return OPERATIONS.find((op) => op.type === type);
+  const operation = db
+    .select({
+      type: operations.type,
+      name: operations.name,
+      description: operations.description,
+      splitKind: operations.splitKind,
+      defaultChunkSize: operations.defaultChunkSize,
+      gpu: operations.gpu,
+      outputFormat: operations.outputFormat,
+      instructions: operations.instructions,
+    })
+    .from(operations)
+    .where(
+      and(
+        eq(operations.type, type),
+        eq(operations.status, "BUILTIN"),
+      ),
+    )
+    .get();
+  return normalizeOperation(operation);
 }
 
 export function toPublicOperation(op: Operation) {

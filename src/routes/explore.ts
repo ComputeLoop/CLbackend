@@ -21,6 +21,8 @@ export const exploreRoutes = new Elysia({ prefix: "/explore" })
         ownerId: projects.ownerId,
         opType: projects.opType,
         datasetId: projects.datasetId,
+        rewardPerChunk: projects.rewardPerChunk,
+        escrowCredits: projects.escrowCredits,
         createdAt: projects.createdAt,
         ownerUsername: users.username,
       })
@@ -83,6 +85,8 @@ export const exploreRoutes = new Elysia({ prefix: "/explore" })
         opType: project.opType,
         opName: op?.name ?? project.opType,
         gpu: op?.gpu ?? false,
+        rewardPerChunk: project.rewardPerChunk,
+        escrowCredits: project.escrowCredits,
         status: project.status,
         ownerId: project.ownerId,
         ownerUsername: project.ownerUsername,

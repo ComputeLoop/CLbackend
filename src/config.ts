@@ -10,5 +10,6 @@ export const HOSTNAME = process.env.HOSTNAME ?? "0.0.0.0";
 export const CORS_ORIGINS = [
   "http://localhost:5173",
   "https://clfrontend-eight.vercel.app",
+  ...(process.env.CORS_ORIGINS ?? "").split(",").map((origin) => origin.trim()).filter(Boolean),
 ];
 export const SESSION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;

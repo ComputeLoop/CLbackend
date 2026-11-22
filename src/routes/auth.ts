@@ -33,7 +33,7 @@ export const authRoutes = new Elysia({ prefix: "/auth" })
       });
 
       const userId = crypto.randomUUID();
-
+      const createdAt = new Date().toISOString();
       try {
         db.insert(users)
           .values({
@@ -41,7 +41,7 @@ export const authRoutes = new Elysia({ prefix: "/auth" })
             email: body.email,
             username: body.username,
             passwordHash,
-            createdAt: new Date().toISOString(),
+            createdAt,
           })
           .run();
       } catch (error) {

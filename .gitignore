@@ -5,8 +5,11 @@
 /.pnp
 .pnp.js
 
-# testing
+# Local tests and coverage
 /coverage
+/integration/
+/tests/
+cookies.txt
 
 # next.js
 /.next/
@@ -25,10 +28,9 @@ yarn-debug.log*
 yarn-error.log*
 
 # local env files
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+.env
+.env.*
+!.env.example
 
 # vercel
 .vercel
@@ -41,19 +43,25 @@ yarn-error.log*
 package-lock.json
 **/*.bun
 
-# database
-src/db/test.ts
-computeloop.db
+# Local SQLite databases, backups, and sidecar files
+/src/db/test.ts
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
 
-# testing
-cookies.txt
+# Machine-specific Compose configuration
+/docker-compose.yml
+/docker-compose.override.yml
 
-# docker compose
-docker-compose.yml
+# Local demo, development notes, and runtime data
+/docs/
+/examples/
+/sample-data/
+/scripts/
+/storage/
+/backups/
 
-/sample-data 
-/scripts 
-/storage
-/tests
-
-/docs/testing
+.codebase-memory
